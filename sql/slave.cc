@@ -3532,12 +3532,6 @@ apply_event_and_update_pos_setup(Log_event* ev, THD* thd, rpl_group_info *rgi)
   thd->variables.server_id = ev->server_id;
   thd->set_time();                            // time the query
   thd->lex->current_select= 0;
-  if (!ev->when)
-  {
-    my_hrtime_t hrtime= my_hrtime();
-    ev->when= hrtime_to_my_time(hrtime);
-    ev->when_sec_part= hrtime_sec_part(hrtime);
-  }
   thd->variables.option_bits=
     (thd->variables.option_bits & ~OPTION_SKIP_REPLICATION) |
     (ev->flags & LOG_EVENT_SKIP_REPLICATION_F ? OPTION_SKIP_REPLICATION : 0);
@@ -3889,11 +3883,18 @@ static int exec_relay_log_event(THD* thd, Relay_log_info* rli,
       the user might be surprised to see a claim that the slave is up to date
       long before those queued events are actually executed.
      */
-    if (!rli->mi->using_parallel() &&
-        !(ev->is_artificial_event() || ev->is_relay_log_event() || (ev->when == 0)))
+    if (!rli->mi->using_parallel())
     {
-      rli->last_master_timestamp= ev->when + (time_t) ev->exec_time;
-      DBUG_ASSERT(rli->last_master_timestamp >= 0);
+      if (!(ev->is_artificial_event() || ev->is_relay_log_event() || (ev->when == 0)))
+      {
+        rli->last_master_timestamp= ev->when + (time_t) ev->exec_time;
+	DBUG_ASSERT(rli->last_master_timestamp >= 0);
+      }
+      /*
+        For fake rotate event update its timestamp to the latest laster_master_timestamp.
+      */
+      if (ev->when == 0)
+        ev->when= (my_time_t)rli->last_master_timestamp;
     }
 
     /*
@@ -3970,9 +3971,13 @@ static int exec_relay_log_event(THD* thd, Relay_log_info* rli,
         */
         if (ev->get_type_code() != FORMAT_DESCRIPTION_EVENT)
           rli->last_master_timestamp= ev->when + (time_t) ev->exec_time;
-
         DBUG_ASSERT(rli->last_master_timestamp >= 0);
       }
+      /*
+        For fake rotate event update its timestamp to the latest laster_master_timestamp.
+      */
+      if (ev->when == 0)
+        ev->when= (my_time_t)rli->last_master_timestamp;
     }
 
     if (typ == GTID_EVENT)
